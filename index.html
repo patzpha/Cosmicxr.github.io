@@ -2,151 +2,195 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Cosmic XR - Space In Your Room</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic XR Web - Hand Tracking</title>
+    
+    <!-- Bibliotecas do MediaPipe para Rastreamento de Mãos -->
+    <script src="https://jsdelivr.net" crossorigin="anonymous"></script>
+    <script src="https://jsdelivr.net" crossorigin="anonymous"></script>
+
     <style>
         body {
             margin: 0;
             padding: 0;
-            overflow: hidden;
-            background-color: #000;
+            background: #050510;
+            color: white;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
         }
-        #info-overlay {
+
+        /* Vídeo da câmera (escondido ou em miniatura espelhada no canto) */
+        #webcam {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            width: 160px;
+            height: 120px;
+            transform: scaleX(-1); /* Espelhar o vídeo */
+            border: 2px solid #3a3a5a;
+            border-radius: 8px;
+            z-index: 10;
+        }
+
+        /* Canvas onde desenhamos o "cursor" da mão */
+        #output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        /* Espaço Sideral / Universo */
+        #universe {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            box-sizing: border-box;
+            padding: 0 50px;
+        }
+
+        /* Estilo dos Planetas */
+        .planet {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            text-shadow: 1px 1px 5px black;
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        }
+
+        #marte { background: radial-gradient(circle, #ff4500, #8b0000); }
+        #terra { background: radial-gradient(circle, #0055ff, #001155); }
+        #jupiter { background: radial-gradient(circle, #d2b48c, #8b4513); }
+
+        /* Estado quando a mão colide/toca no planeta */
+        .planet.hovered {
+            transform: scale(1.3);
+            box-shadow: 0 0 40px #00ffff;
+        }
+
+        /* Painel de Informações */
+        #info-panel {
             position: absolute;
             top: 20px;
             left: 50%;
             transform: translateX(-50%);
-            color: white;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 15px 30px;
+            border-radius: 30px;
+            border: 1px solid #00ffff;
             text-align: center;
+            font-size: 1.2rem;
             z-index: 10;
             pointer-events: none;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
         }
-        h1 { margin: 0 0 5px 0; font-size: 1.5rem; letter-spacing: 2px; }
-        p { margin: 0; font-size: 0.9rem; opacity: 0.8; }
     </style>
-    <!-- Importa Three.js e os módulos necessários para WebXR e Hand Tracking -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com",
-                "three/addons/": "https://unpkg.com"
-            }
-        }
-    </script>
 </head>
 <body>
 
-    <div id="info-overlay">
-        <h1>COSMIC XR</h1>
-        <p>Use um headset compatível (Meta Quest) para ver o espaço na sua sala com Hand Tracking.</p>
+    <div id="info-panel">Mova sua mão na câmera e toque em um planeta!</div>
+    
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="universe">
+        <div id="marte" class="planet">Marte</div>
+        <div id="terra" class="planet">Terra</div>
+        <div id="jupiter" class="planet">Júpiter</div>
     </div>
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { ARButton } from 'three/addons/webxr/ARButton.js';
-        import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const infoPanel = document.getElementById('info-panel');
+        const planets = document.querySelectorAll('.planet');
 
-        let container;
-        let camera, scene, renderer;
-        let earthMesh, cloudsMesh;
-        let hand1, hand2;
+        // Ajustar tamanho do canvas ao iniciar
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
 
-        init();
-        animate();
-
-        function init() {
-            container = document.createElement('div');
-            document.body.appendChild(container);
-
-            // 1. Configuração da Cena e Câmera
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
-            // 2. Iluminação Espacial
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-            scene.add(ambientLight);
-
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-            directionalLight.position.set(5, 3, 5);
-            scene.add(directionalLight);
-
-            // 3. Criação do Planeta Terra (Cosmic Object)
-            const earthGroup = new THREE.Group();
-            earthGroup.position.set(0, 1.2, -0.6); // Posiciona o planeta na altura dos olhos e um pouco à frente
-            scene.add(earthGroup);
-
-            // Texturas básicas via CDN para simular a Terra
-            const textureLoader = new THREE.TextureLoader();
-            const earthTexture = textureLoader.load('https://githubusercontent.com');
-            const cloudsTexture = textureLoader.load('https://githubusercontent.com');
-
-            // Geometria da Terra
-            const geometry = new THREE.SphereGeometry(0.2, 32, 32);
-            const material = new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 });
-            earthMesh = new THREE.Mesh(geometry, material);
-            earthGroup.add(earthMesh);
-
-            // Nuvens da Terra
-            const cloudsMaterial = new THREE.MeshStandardMaterial({ map: cloudsTexture, transparent: true, opacity: 0.4 });
-            cloudsMesh = new THREE.Mesh(geometry, cloudsMaterial);
-            cloudsMesh.scale.setScalar(1.01);
-            earthGroup.add(cloudsMesh);
-
-            // 4. Configuração do WebGL Renderer para XR
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            container.appendChild(renderer.domElement);
-
-            // 5. Adiciona o botão de AR com suporte a Hand Tracking
-            document.body.appendChild(ARButton.createButton(renderer, {
-                requiredFeatures: ['hand-tracking'],
-                optionalFeatures: ['local-floor']
-            }));
-
-            // 6. Configuração dos Modelos das Mãos (Hand Tracking)
-            const handModelFactory = new XRHandModelFactory();
-
-            // Mão 1 (Esquerda)
-            hand1 = renderer.xr.getHand(0);
-            hand1.add(handModelFactory.createHandModel(hand1, 'mesh'));
-            scene.add(hand1);
-
-            // Mão 2 (Direita)
-            hand2 = renderer.xr.getHand(1);
-            hand2.add(handModelFactory.createHandModel(hand2, 'mesh'));
-            scene.add(hand2);
-
-            // Eventos para detectar gestos básicos (pode expandir para interagir com o planeta)
-            hand1.addEventListener('connected', (event) => console.log('Mão esquerda conectada', event.data));
-            hand2.addEventListener('connected', (event) => console.log('Mão direita conectada', event.data));
-
-            window.addEventListener('resize', onWindowResize);
+        // Função para detectar colisão entre o dedo indicador e o planeta
+        function checkCollision(x, y) {
+            planets.forEach(planet => {
+                const rect = planet.getBoundingClientRect();
+                
+                // Verifica se as coordenadas do dedo estão dentro das bordas do planeta
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    if (!planet.classList.contains('hovered')) {
+                        planet.classList.add('hovered');
+                        infoPanel.innerText = `Você encontrou e tocou em: ${planet.innerText}!`;
+                        infoPanel.style.borderColor = "#ff00ff";
+                    }
+                } else {
+                    planet.classList.remove('hovered');
+                }
+            });
         }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
+        // Processar os resultados do rastreamento de mãos
+        function onResults(results) {
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
-        // 7. Loop de Animação compatível com XR
-        function animate() {
-            renderer.setAnimationLoop(render);
-        }
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // Landmark 8 é a ponta do dedo indicador
+                    const indexFingerTip = landmarks[8];
+                    
+                    // Converter coordenadas normais (0 a 1) para pixels da tela (espelhando o X)
+                    const x = (1 - indexFingerTip.x) * canvasElement.width;
+                    const y = indexFingerTip.y * canvasElement.height;
 
-        function render() {
-            // Rotação sutil do planeta e das nuvens (efeito cósmico)
-            if (earthMesh && cloudsMesh) {
-                earthMesh.rotation.y += 0.002;
-                cloudsMesh.rotation.y += 0.003;
+                    // Desenhar um cursor XR na ponta do seu dedo indicador
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, 15, 0, 2 * Math.PI);
+                    canvasCtx.fillStyle = '#00ffff';
+                    canvasCtx.fill();
+                    canvasCtx.strokeStyle = '#ffffff';
+                    canvasCtx.lineWidth = 3;
+                    canvasCtx.stroke();
+
+                    // Testar se o dedo está tocando algum planeta
+                    checkCollision(x, y);
+                }
             }
-
-            renderer.render(scene, camera);
         }
+
+        // Configuração do modelo MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => `https://jsdelivr.net{file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Inicializar a câmera do dispositivo
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+        
+        camera.start();
     </script>
 </body>
 </html>
