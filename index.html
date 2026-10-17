@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Cosmic XR – Espaço no teu quarto</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#04040c;--fg:#eef0ff;--mut:#9aa0c8;--acc:#7c8cff;--card:rgba(20,22,44,.72);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#04040c}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none}
+#ui{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:max(24px,env(safe-area-inset-top)) 20px max(24px,env(safe-area-inset-bottom));pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(26px,6vw,44px);font-weight:700;letter-spacing:.04em}
+h1 span{color:var(--acc)}
+.sub{color:var(--mut);margin:6px 0 0;font-size:15px}
+.card{background:var(--card);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:14px 18px;max-width:420px;pointer-events:auto;font-size:14px;line-height:1.5;color:var(--mut)}
+.btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+button{pointer-events:auto;font:inherit;font-weight:600;color:#fff;background:var(--acc);border:0;border-radius:999px;padding:13px 22px;cursor:pointer}
+button.alt{background:rgba(255,255,255,.12)}
+button:disabled{opacity:.45;cursor:not-allowed}
+#status{font-size:13px;color:var(--mut)}
+#hud{display:none;gap:8px;flex-wrap:wrap;justify-content:center;pointer-events:auto}
+#hud.on{display:flex}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div><h1>COSMIC <span>XR</span></h1><p class="sub">O espaço dentro do teu quarto</p></div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+    <div id="hud">
+      <button class="alt" id="pause">⏸ Pausar</button>
+      <button class="alt" id="speed">Velocidade ×1</button>
+      <button class="alt" id="orbits">Órbitas</button>
+      <button class="alt" id="reset">Recentrar</button>
+    </div>
+    <div class="card" id="intro">
+      <b style="color:var(--fg)">Como usar</b><br>
+      Em headset (Quest, Vision Pro…) entra em AR e usa as mãos: <b style="color:var(--fg)">pinça</b> perto do sistema para o mover, <b style="color:var(--fg)">pinça com as duas mãos</b> para aumentar ou diminuir, e pinça num planeta para ver a informação.
+      <div class="btns"><button id="enter" disabled>Entrar em AR</button><button class="alt" id="preview">Pré-visualizar 3D</button></div>
+      <p id="status" style="margin:10px 0 0">A verificar WebXR…</p>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;
+renderer.xr.setReferenceSpaceType('local-floor');
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+const cam=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,.01,2000);
+scene.add(new THREE.AmbientLight(0x6670aa,.55));
+const root=new THREE.Group(); scene.add(root);
+const sunLight=new THREE.PointLight(0xfff2cc,2.2,0,1); root.add(sunLight);
+
+/* texturas procedurais */
+function tex(c1,c2,bands,seed){
+  const c=document.createElement('canvas');c.width=256;c.height=128;const g=c.getContext('2d');
+  g.fillStyle=c1;g.fillRect(0,0,256,128);let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147483647;
+  for(let i=0;i<(bands?26:90);i++){g.globalAlpha=.25+r()*.35;g.fillStyle=r()>.5?c2:c1;
+    if(bands)g.fillRect(0,r()*128,256,3+r()*10);else{g.beginPath();g.arc(r()*256,r()*128,3+r()*16,0,7);g.fill();}}
+  g.globalAlpha=1;return new THREE.CanvasTexture(c);
+}
+const DATA=[
+ {n:'Mercúrio',r:.35,d:4,s:4.1,c:'#8c8379',c2:'#5d564f',i:'O planeta mais próximo do Sol. Um ano dura apenas 88 dias terrestres.'},
+ {n:'Vénus',r:.6,d:6,s:1.6,c:'#d9b27c',c2:'#f0d9a8',b:1,i:'O planeta mais quente, com uma atmosfera densa de dióxido de carbono.'},
+ {n:'Terra',r:.65,d:8.5,s:1,c:'#2a6bd1',c2:'#3fa05a',i:'O nosso lar, o único planeta conhecido com vida.',moon:1},
+ {n:'Marte',r:.45,d:11,s:.53,c:'#b5502f',c2:'#7d3220',i:'O planeta vermelho, com o maior vulcão do sistema solar: o Monte Olimpo.'},
+ {n:'Júpiter',r:1.5,d:15,s:.084,c:'#c9a47a',c2:'#8f6a48',b:1,i:'O maior planeta. A Grande Mancha Vermelha é uma tempestade com séculos.'},
+ {n:'Saturno',r:1.25,d:19.5,s:.034,c:'#d8c28a',c2:'#b19a64',b:1,ring:1,i:'Famoso pelos seus anéis de gelo e rocha. Tão leve que flutuaria na água.'},
+ {n:'Úrano',r:.9,d:23.5,s:.012,c:'#8fd5d9',c2:'#6fb7bd',b:1,i:'Um gigante de gelo que gira inclinado, quase deitado de lado.'},
+ {n:'Neptuno',r:.88,d:27,s:.006,c:'#3a55d6',c2:'#2a3fa8',b:1,i:'O planeta mais distante, com ventos que ultrapassam os 2000 km/h.'}
+];
+const bodies=[];
+const sun=new THREE.Mesh(new THREE.SphereGeometry(1.8,48,48),new THREE.MeshBasicMaterial({map:tex('#ffb21e','#ff6a00',0,7)}));
+sun.userData={n:'Sol',i:'A estrela do nosso sistema. Contém 99,8 % de toda a massa do sistema solar.',r:1.8};
+root.add(sun);bodies.push(sun);
+const orbitLines=new THREE.Group();root.add(orbitLines);
+DATA.forEach((p,k)=>{
+  const piv=new THREE.Group();piv.rotation.y=k*1.3;root.add(piv);
+  const m=new THREE.Mesh(new THREE.SphereGeometry(p.r,40,40),new THREE.MeshStandardMaterial({map:tex(p.c,p.c2,p.b,k+3),roughness:.9}));
+  m.position.x=p.d;m.userData={...p,speed:p.s,piv};piv.add(m);bodies.push(m);
+  if(p.ring){const rg=new THREE.Mesh(new THREE.RingGeometry(p.r*1.4,p.r*2.3,64),new THREE.MeshBasicMaterial({color:0xcdb98a,side:2,transparent:true,opacity:.7}));rg.rotation.x=1.9;m.add(rg);}
+  if(p.moon){const mp=new THREE.Group();m.add(mp);const mo=new THREE.Mesh(new THREE.SphereGeometry(.18,20,20),new THREE.MeshStandardMaterial({color:0xbbbbbb}));mo.position.x=1.3;mp.add(mo);m.userData.moonPiv=mp;}
+  const pts=[];for(let a=0;a<=128;a++)pts.push(new THREE.Vector3(Math.cos(a/128*6.2832)*p.d,0,Math.sin(a/128*6.2832)*p.d));
+  orbitLines.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x7c8cff,transparent:true,opacity:.28})));
+});
+/* estrelas (só no modo pré-visualização) */
+const sp=[];for(let i=0;i<1800;i++){const v=new THREE.Vector3().randomDirection().multiplyScalar(300+Math.random()*500);sp.push(v.x,v.y,v.z);}
+const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+const stars=new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:1.6,sizeAttenuation:false}));scene.add(stars);
+
+/* etiqueta de informação */
+let sel=null;
+const lc=document.createElement('canvas');lc.width=512;lc.height=256;
+const ltex=new THREE.CanvasTexture(lc);
+const label=new THREE.Sprite(new THREE.SpriteMaterial({map:ltex,transparent:true,depthTest:false}));label.visible=false;label.renderOrder=9;scene.add(label);
+function wrap(g,t,x,y,w,lh){let l='';for(const wd of t.split(' ')){const tt=l+wd+' ';if(g.measureText(tt).width>w&&l){g.fillText(l,x,y);l=wd+' ';y+=lh;}else l=tt;}g.fillText(l,x,y);}
+function select(b){
+  sel=b;if(!b){label.visible=false;return;}
+  const g=lc.getContext('2d');g.clearRect(0,0,512,256);
+  g.fillStyle='rgba(20,22,44,.88)';g.beginPath();g.roundRect?g.roundRect(4,4,504,248,28):g.rect(4,4,504,248);g.fill();
+  g.strokeStyle='#7c8cff';g.lineWidth=3;g.stroke();
+  g.fillStyle='#fff';g.font='bold 44px system-ui,sans-serif';g.fillText(b.userData.n,28,70);
+  g.fillStyle='#b8bde0';g.font='28px system-ui,sans-serif';wrap(g,b.userData.i,28,120,456,38);
+  ltex.needsUpdate=true;label.visible=true;
+}
+
+/* estado */
+let S=1,paused=false,spd=1,inAR=false,placeNext=false;
+function setS(s){S=Math.min(Math.max(s,.01),3);root.scale.setScalar(S);}
+setS(1);
+const tmp=new THREE.Vector3(),tmp2=new THREE.Vector3();
+
+/* pré-visualização: órbita com rato/toque */
+let yaw=.6,pitch=.5,dist=46,drag=null;
+const ray=new THREE.Raycaster(),ptr=new THREE.Vector2();
+const el=renderer.domElement;
+el.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,moved:0};});
+el.addEventListener('pointermove',e=>{if(!drag||inAR)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;drag.moved+=Math.abs(dx)+Math.abs(dy);yaw-=dx*.006;pitch=Math.min(1.4,Math.max(-1.4,pitch+dy*.006));});
+el.addEventListener('pointerup',e=>{
+  if(drag&&drag.moved<6&&!inAR){ptr.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);ray.setFromCamera(ptr,cam);const h=ray.intersectObjects(bodies,false)[0];select(h?h.object:null);}
+  drag=null;});
+el.addEventListener('wheel',e=>{dist=Math.min(120,Math.max(8,dist*(1+e.deltaY*.001)));},{passive:true});
+let pd=0;
+el.addEventListener('touchmove',e=>{if(e.touches.length==2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pd)dist=Math.min(120,Math.max(8,dist*pd/d));pd=d;}},{passive:true});
+el.addEventListener('touchend',()=>pd=0);
+
+/* mãos */
+const JN=['wrist','thumb-metacarpal','thumb-phalanx-proximal','thumb-phalanx-distal','thumb-tip','index-finger-metacarpal','index-finger-phalanx-proximal','index-finger-phalanx-intermediate','index-finger-phalanx-distal','index-finger-tip','middle-finger-metacarpal','middle-finger-phalanx-proximal','middle-finger-phalanx-intermediate','middle-finger-phalanx-distal','middle-finger-tip','ring-finger-metacarpal','ring-finger-phalanx-proximal','ring-finger-phalanx-intermediate','ring-finger-phalanx-distal','ring-finger-tip','pinky-finger-metacarpal','pinky-finger-phalanx-proximal','pinky-finger-phalanx-intermediate','pinky-finger-phalanx-distal','pinky-finger-tip'];
+const jgeo=new THREE.SphereGeometry(.007,10,10);
+const hands=[0,1].map(i=>{
+  const h=renderer.xr.getHand(i);scene.add(h);
+  const g=new THREE.Group();scene.add(g);
+  const ms={};JN.forEach(n=>{const m=new THREE.Mesh(jgeo,new THREE.MeshBasicMaterial({color:n.endsWith('tip')?0xffffff:0x7c8cff}));m.visible=false;g.add(m);ms[n]=m;});
+  const cur=new THREE.Mesh(new THREE.SphereGeometry(.014,14,14),new THREE.MeshBasicMaterial({color:0xffd24a,transparent:true,opacity:.9}));cur.visible=false;g.add(cur);
+  return{h,ms,cur,pinch:false,last:new THREE.Vector3(),pt:new THREE.Vector3(),on:false};
+});
+let twoD=0;
+function updateHands(){
+  hands.forEach(H=>{
+    const j=H.h.joints;const t=j['thumb-tip'],ix=j['index-finger-tip'];
+    H.on=!!(t&&ix);
+    JN.forEach(n=>{const q=j[n];H.ms[n].visible=!!q&&inAR;if(q)H.ms[n].position.copy(q.position);});
+    if(!H.on){H.pinch=false;H.cur.visible=false;return;}
+    const d=t.position.distanceTo(ix.position);
+    H.pt.copy(t.position).add(ix.position).multiplyScalar(.5);
+    const was=H.pinch;
+    if(!was&&d<.022)H.pinch=true;else if(was&&d>.04)H.pinch=false;
+    H.cur.visible=true;H.cur.position.copy(H.pt);H.cur.material.color.set(H.pinch?0xff5a7a:0xffd24a);H.cur.scale.setScalar(H.pinch?.6:1);
+    if(H.pinch&&!was){
+      /* escolher corpo mais próximo */
+      let best=null,bd=.12;bodies.forEach(b=>{b.getWorldPosition(tmp);const dd=tmp.distanceTo(H.pt)-b.userData.r*S;if(dd<bd){bd=dd;best=b;}});
+      if(best)select(best);
+      H.grab=!!best||H.pt.distanceTo(root.position)<S*30;
+      H.last.copy(H.pt);
+    }
+  });
+  const a=hands[0],b=hands[1];
+  if(a.pinch&&b.pinch){
+    const d=a.pt.distanceTo(b.pt);
+    if(twoD>0)setS(S*d/twoD);
+    twoD=d;
+    root.position.add(tmp.copy(a.pt).add(b.pt).multiplyScalar(.5).sub(tmp2.copy(a.last).add(b.last).multiplyScalar(.5)));
+    a.last.copy(a.pt);b.last.copy(b.pt);
+  }else{
+    twoD=0;
+    hands.forEach(H=>{if(H.pinch&&H.grab){root.position.add(tmp.copy(H.pt).sub(H.last));}H.last.copy(H.pt);});
+  }
+}
+
+/* botões */
+$('pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'▶ Continuar':'⏸ Pausar';};
+$('speed').onclick=e=>{spd=spd>=8?1:spd*2;e.target.textContent='Velocidade ×'+spd;};
+$('orbits').onclick=()=>orbitLines.visible=!orbitLines.visible;
+$('reset').onclick=()=>{placeNext=true;if(!inAR){setS(1);root.position.set(0,0,0);}};
+
+/* XR */
+const st=$('status');
+if(navigator.xr){
+  navigator.xr.isSessionSupported('immersive-ar').then(ok=>{
+    st.textContent=ok?'AR disponível neste dispositivo.':'AR não disponível aqui. Usa um headset ou o Chrome em Android.';
+    $('enter').disabled=!ok;
+  }).catch(()=>st.textContent='Não foi possível verificar o WebXR.');
+}else st.textContent='WebXR não suportado neste navegador. Usa a pré-visualização 3D.';
+$('enter').onclick=async()=>{
+  try{
+    const s=await navigator.xr.requestSession('immersive-ar',{optionalFeatures:['local-floor','hand-tracking']});
+    await renderer.xr.setSession(s);
+    inAR=true;stars.visible=false;placeNext=true;setS(.04);
+    $('intro').style.display='none';$('ui').style.display='none';
+    s.addEventListener('end',()=>{inAR=false;stars.visible=true;setS(1);root.position.set(0,0,0);$('ui').style.display='flex';$('intro').style.display='';});
+  }catch(e){st.textContent='Erro ao iniciar AR: '+e.message;}
+};
+$('preview').onclick=()=>{$('intro').style.display='none';$('hud').classList.add('on');};
+
+/* loop */
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),.05);
+  if(!paused)bodies.forEach(b=>{
+    const u=b.userData;if(u.piv)u.piv.rotation.y+=dt*u.speed*spd*.5;
+    b.rotation.y+=dt*.4*spd;if(u.moonPiv)u.moonPiv.rotation.y+=dt*3*spd;
+  });
+  if(inAR){
+    const xc=renderer.xr.getCamera(cam);
+    if(placeNext&&xc.cameras&&xc.cameras.length){
+      xc.getWorldPosition(tmp);xc.getWorldDirection(tmp2);
+      root.position.copy(tmp).addScaledVector(tmp2,1.2);root.position.y=tmp.y-.15;placeNext=false;
+    }
+    updateHands();
+  }else{
+    cam.position.set(Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),Math.cos(yaw)*Math.cos(pitch)).multiplyScalar(dist);
+    cam.lookAt(0,0,0);
+    if(!paused)root.rotation.y+=0;
+  }
+  if(sel&&label.visible){
+    sel.getWorldPosition(tmp);label.position.copy(tmp).y+=(sel.userData.r*1.4+2.5)*S;
+    label.scale.set(S*16,S*8,1);
+  }
+  renderer.render(scene,cam);
+});
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+</script>
+</body>
+</html>
